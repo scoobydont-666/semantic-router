@@ -6,6 +6,24 @@ This page consolidates the design principles for authoring **embedding anchor pa
 
 Read this after the [Embedding Signal](./embedding) tutorial. That page covers the mechanics (`candidates`, `threshold`, `aggregation_method`, `query_modality`); this page covers how to make a pack that routes reliably instead of one that looks reasonable and misfires at scale.
 
+## Key Advantages
+
+- Provides a repeatable authoring pattern for embedding anchor packs across text and image modalities.
+- Reduces false positives by treating benign examples as first-class anchors rather than relying on negative filters.
+- Makes threshold calibration explicit so examples are not copied across models or modalities without validation.
+
+## What Problem Does It Solve?
+
+Embedding rules are easy to write but hard to make robust. A few plausible phrases can look correct in a demo while producing unstable cosine matches in production. This guide gives anchor-pack authors a practical checklist for building, calibrating, and validating those candidate sets as small classifiers.
+
+## When to Use
+
+Use these principles when you create or revise `embedding` signal rules, especially when a route depends on learned semantic similarity rather than exact keyword matching. They are most important for sensitive routing categories, multimodal inputs, and any deployment where benign traffic is close to the sensitive examples.
+
+## Configuration
+
+This page does not add new config fields. Apply the guidance to `routing.signals.embeddings` entries by choosing better `candidates`, calibrating `threshold`, and selecting the appropriate `aggregation_method` and `query_modality` for the model you serve.
+
 ## Principle 1: anchors describe what the input *is*, not the words in it
 
 An embedding anchor is matched in the model's semantic space, so it should describe the **signature** of the content, not a literal string you expect to appear.
