@@ -19,15 +19,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Prepare reviewed candidate when available
-        shell: bash
-        run: |
-          set -euo pipefail
-          if test -f tools/pr2067/prepare.py; then
-            python3 tools/pr2067/prepare.py
-          else
-            echo 'Baseline validation only: remediation script not yet present.'
-          fi
       - name: Toolchain
         shell: bash
         run: |
@@ -36,6 +27,14 @@ jobs:
           rustup default stable
           rustc --version
           cargo --version
+      - name: Prepare clean reviewed candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/pr2067/prepare.py
+          git rev-parse HEAD | tee /tmp/pr2067-head.log
+          git diff b82342ae4fa402e961feffa4dafb78cec0bd6c7d HEAD --check
+          rustfmt --edition 2021 --config skip_children=true --check candle-binding/src/ffi/embedding.rs candle-binding/src/ffi/embedding_init_test.rs
       - name: Review repository gates
         shell: bash
         run: |
@@ -46,6 +45,11 @@ jobs:
             echo '::endgroup::'
           done
           grep -n -A18 -B3 '^test-binding-\(minimal\|lora\):' tools/make/*.mk Makefile || true
+      - name: Focused initialization regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --manifest-path candle-binding/Cargo.toml --no-default-features --lib embedding_init_order_regressions -- --nocapture 2>&1 | tee /tmp/pr2067-regressions.log
       - name: Binding minimal tests
         shell: bash
         run: |
@@ -62,6 +66,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: pr2067-binding-validation-${{ github.sha }}
-          path: /tmp/pr2067-*.log
+          path: /tmp/pr2067-*
           retention-days: 14
           if-no-files-found: warn
