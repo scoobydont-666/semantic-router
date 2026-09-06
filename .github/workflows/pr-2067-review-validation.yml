@@ -16,6 +16,7 @@ jobs:
       CARGO_PROFILE_TEST_DEBUG: '0'
       CARGO_PROFILE_DEV_DEBUG: '0'
       PR2067_BASE: 8c76b723c723fd79163a6cca98f62d5af03fb722
+      CHANGED_FILES: candle-binding/src/ffi/embedding.rs candle-binding/src/ffi/embedding_init_test.rs tools/make/rust.mk
     steps:
       - uses: actions/checkout@v4
         with:
@@ -24,7 +25,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rustup toolchain install stable --profile minimal --component rustfmt
+          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
           rustup default stable
           rustc --version
           cargo --version
@@ -39,17 +40,19 @@ jobs:
           git diff "$PR2067_BASE" HEAD --check
           git diff "$PR2067_BASE" HEAD > /tmp/pr2067-remediation.patch
           rustfmt --edition 2021 --config skip_children=true --check candle-binding/src/ffi/embedding.rs candle-binding/src/ffi/embedding_init_test.rs
-      - name: Review repository gates
+      - name: Repository report and contract validation
         if: ${{ !cancelled() && steps.candidate.outcome == 'success' }}
         shell: bash
         run: |
           set -euo pipefail
-          for f in tools/agent/docs/README.md tools/agent/docs/repo-map.md tools/agent/docs/environments.md tools/agent/docs/change-surfaces.md; do
-            echo "::group::$f"
-            cat "$f"
-            echo '::endgroup::'
-          done
-          make agent-report ENV=cpu CHANGED_FILES="candle-binding/src/ffi/embedding.rs candle-binding/src/ffi/embedding_init_test.rs tools/make/rust.mk" 2>&1 | tee /tmp/pr2067-agent-report.log
+          make agent-report ENV=cpu CHANGED_FILES="$CHANGED_FILES" 2>&1 | tee /tmp/pr2067-agent-report.log
+          make agent-validate ENV=cpu CHANGED_FILES="$CHANGED_FILES" 2>&1 | tee /tmp/pr2067-agent-validate.log
+      - name: Changed-file lint and structure gates
+        if: ${{ !cancelled() && steps.candidate.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          make agent-lint ENV=cpu AGENT_BASE_REF="$PR2067_BASE" CHANGED_FILES="$CHANGED_FILES" 2>&1 | tee /tmp/pr2067-agent-lint.log
       - name: CPU Rust CI suite including initialization regressions
         if: ${{ !cancelled() && steps.candidate.outcome == 'success' }}
         shell: bash
@@ -72,6 +75,15 @@ jobs:
             echo '::error::LoRA target masked failing Go tests; inspect the retained log for missing-model prerequisites or regressions.'
             exit 1
           fi
+      - name: Verify candidate remained unchanged during validation
+        if: ${{ !cancelled() && steps.candidate.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$(cat /tmp/pr2067-candidate.sha)"
+          git status --short | tee /tmp/pr2067-final-status.log
+          git diff --exit-code
+          git diff --cached --exit-code
       - name: Retain validation logs and candidate patch
         if: always()
         uses: actions/upload-artifact@v4

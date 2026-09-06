@@ -90,6 +90,40 @@ fn assert_repeated_init_is_noop() {
     assert_embeddings(8);
 }
 
+fn assert_all_entrypoints_share_gate() {
+    let guard = lock_embedding_init().unwrap();
+    let (started_tx, started_rx) = mpsc::channel();
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::scope(|scope| {
+        let mut workers = Vec::new();
+        for entry in 0..4 {
+            let started = started_tx.clone();
+            let done = done_tx.clone();
+            workers.push(scope.spawn(move || {
+                started.send(()).unwrap();
+                let result = match entry {
+                    0 => init_mmbert_embedding_model(std::ptr::null(), true),
+                    1 => init_embedding_models_with_mmbert(std::ptr::null(), std::ptr::null(), std::ptr::null(), true),
+                    2 => init_embedding_models(std::ptr::null(), std::ptr::null(), true),
+                    _ => init_multimodal_embedding_model(std::ptr::null(), true),
+                };
+                done.send(result).unwrap();
+            }));
+        }
+        for _ in 0..4 {
+            started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        }
+        assert!(matches!(done_rx.recv_timeout(Duration::from_millis(100)),
+            Err(mpsc::RecvTimeoutError::Timeout)), "an entrypoint bypassed the initialization gate");
+        drop(guard);
+        for _ in 0..4 {
+            assert!(!done_rx.recv_timeout(Duration::from_secs(5)).unwrap());
+        }
+        for worker in workers { worker.join().unwrap(); }
+    });
+    assert!(GLOBAL_MODEL_FACTORY.get().is_none());
+}
+
 fn run_case(case: &str) {
     assert!(GLOBAL_MODEL_FACTORY.get().is_none());
     assert!(STANDALONE_MMBERT.get().is_none());
@@ -170,39 +204,7 @@ fn run_case(case: &str) {
             assert!(STANDALONE_MMBERT.get().is_some());
             assert_embeddings(8);
         }
-        "all_entrypoints_share_gate" => {
-            let guard = lock_embedding_init().unwrap();
-            let (started_tx, started_rx) = mpsc::channel();
-            let (done_tx, done_rx) = mpsc::channel();
-            thread::scope(|scope| {
-                let mut workers = Vec::new();
-                for entry in 0..4 {
-                    let started = started_tx.clone();
-                    let done = done_tx.clone();
-                    workers.push(scope.spawn(move || {
-                        started.send(()).unwrap();
-                        let result = match entry {
-                            0 => init_mmbert_embedding_model(std::ptr::null(), true),
-                            1 => init_embedding_models_with_mmbert(std::ptr::null(), std::ptr::null(), std::ptr::null(), true),
-                            2 => init_embedding_models(std::ptr::null(), std::ptr::null(), true),
-                            _ => init_multimodal_embedding_model(std::ptr::null(), true),
-                        };
-                        done.send(result).unwrap();
-                    }));
-                }
-                for _ in 0..4 {
-                    started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-                }
-                assert!(matches!(done_rx.recv_timeout(Duration::from_millis(100)),
-                    Err(mpsc::RecvTimeoutError::Timeout)), "an entrypoint bypassed the initialization gate");
-                drop(guard);
-                for _ in 0..4 {
-                    assert!(!done_rx.recv_timeout(Duration::from_secs(5)).unwrap());
-                }
-                for worker in workers { worker.join().unwrap(); }
-            });
-            assert!(GLOBAL_MODEL_FACTORY.get().is_none());
-        }
+        "all_entrypoints_share_gate" => assert_all_entrypoints_share_gate(),
         "failed_load_retry" | "failed_standalone_retry" => {
             let dir = fixture(8);
             let model_path = path(&dir);
