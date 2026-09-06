@@ -1,0 +1,67 @@
+name: PR 2067 review validation
+on:
+  push:
+    branches: [work/pr-2067-remediation-20260906]
+permissions:
+  contents: write
+concurrency:
+  group: pr-2067-review-validation
+  cancel-in-progress: true
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CARGO_BUILD_JOBS: '2'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Prepare reviewed candidate when available
+        shell: bash
+        run: |
+          set -euo pipefail
+          if test -f tools/pr2067/prepare.py; then
+            python3 tools/pr2067/prepare.py
+          else
+            echo 'Baseline validation only: remediation script not yet present.'
+          fi
+      - name: Toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install stable --profile minimal --component rustfmt
+          rustup default stable
+          rustc --version
+          cargo --version
+      - name: Review repository gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          for f in docs/agent/README.md docs/agent/repo-map.md docs/agent/environments.md docs/agent/change-surfaces.md; do
+            echo "::group::$f"
+            cat "$f"
+            echo '::endgroup::'
+          done
+          grep -n -A18 -B3 '^test-binding-\(minimal\|lora\):' tools/make/*.mk Makefile || true
+      - name: Binding minimal tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          make test-binding-minimal 2>&1 | tee /tmp/pr2067-minimal.log
+      - name: Binding LoRA tests
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          make test-binding-lora 2>&1 | tee /tmp/pr2067-lora.log
+      - name: Retain validation logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr2067-binding-validation-${{ github.sha }}
+          path: /tmp/pr2067-*.log
+          retention-days: 14
+          if-no-files-found: warn
