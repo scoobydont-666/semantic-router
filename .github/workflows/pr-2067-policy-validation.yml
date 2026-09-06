@@ -1,0 +1,56 @@
+name: PR 2067 repository policy validation
+on:
+  push:
+    branches: [work/pr-2067-policy-validation-20260906]
+permissions:
+  contents: read
+jobs:
+  policy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CARGO_BUILD_JOBS: '2'
+      CANDIDATE_SHA: 06406085000216728ac88412cd275927e40c43ea
+      BASE_SHA: 8c76b723c723fd79163a6cca98f62d5af03fb722
+      CHANGED_FILES: candle-binding/src/ffi/embedding.rs candle-binding/src/ffi/embedding_init_test.rs tools/make/rust.mk
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: 06406085000216728ac88412cd275927e40c43ea
+          persist-credentials: false
+      - name: Verify exact candidate and patch scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$(git rev-parse HEAD^)" = "$BASE_SHA"
+          git diff "$BASE_SHA" HEAD --check
+          git show --format=fuller --stat HEAD | tee /tmp/pr2067-policy-head.log
+      - name: Validate repository harness and CI contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          make agent-validate ENV=cpu CHANGED_FILES="$CHANGED_FILES" 2>&1 | tee /tmp/pr2067-agent-validate.log
+      - name: Changed-file lint and structure gates
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          make agent-lint ENV=cpu AGENT_BASE_REF="$BASE_SHA" CHANGED_FILES="$CHANGED_FILES" 2>&1 | tee /tmp/pr2067-agent-lint.log
+      - name: Detect any gate-generated tracked changes
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git status --short | tee /tmp/pr2067-policy-status.log
+          git diff --exit-code
+          git diff --cached --exit-code
+      - name: Retain exact-head policy receipts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr2067-policy-${{ env.CANDIDATE_SHA }}
+          path: /tmp/pr2067-*.log
+          retention-days: 14
+          if-no-files-found: warn
