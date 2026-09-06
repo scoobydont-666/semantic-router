@@ -15,6 +15,7 @@ jobs:
       CARGO_BUILD_JOBS: '2'
       CARGO_PROFILE_TEST_DEBUG: '0'
       CARGO_PROFILE_DEV_DEBUG: '0'
+      PR2067_BASE: 8c76b723c723fd79163a6cca98f62d5af03fb722
     steps:
       - uses: actions/checkout@v4
         with:
@@ -28,40 +29,50 @@ jobs:
           rustc --version
           cargo --version
       - name: Prepare clean reviewed candidate
+        id: candidate
         shell: bash
         run: |
           set -euo pipefail
+          git fetch --no-tags https://github.com/vllm-project/semantic-router.git "$PR2067_BASE"
+          sed -i "s/b82342ae4fa402e961feffa4dafb78cec0bd6c7d/$PR2067_BASE/g" tools/pr2067/prepare.py
           python3 tools/pr2067/prepare.py
           git rev-parse HEAD | tee /tmp/pr2067-head.log
-          git diff b82342ae4fa402e961feffa4dafb78cec0bd6c7d HEAD --check
+          git diff "$PR2067_BASE" HEAD --check
+          git diff "$PR2067_BASE" HEAD > /tmp/pr2067-remediation.patch
           rustfmt --edition 2021 --config skip_children=true --check candle-binding/src/ffi/embedding.rs candle-binding/src/ffi/embedding_init_test.rs
       - name: Review repository gates
         shell: bash
         run: |
           set -euo pipefail
-          for f in docs/agent/README.md docs/agent/repo-map.md docs/agent/environments.md docs/agent/change-surfaces.md; do
+          for f in tools/agent/docs/README.md tools/agent/docs/repo-map.md tools/agent/docs/environments.md tools/agent/docs/change-surfaces.md; do
             echo "::group::$f"
             cat "$f"
             echo '::endgroup::'
           done
-          grep -n -A18 -B3 '^test-binding-\(minimal\|lora\):' tools/make/*.mk Makefile || true
+          grep -n -A18 -B3 '^test-binding-\(minimal\|lora\):' tools/make/*.mk Makefile
+          make agent-report ENV=cpu CHANGED_FILES="candle-binding/src/ffi/embedding.rs candle-binding/src/ffi/embedding_init_test.rs" 2>&1 | tee /tmp/pr2067-agent-report.log
       - name: Focused initialization regressions
         shell: bash
         run: |
           set -euo pipefail
-          cargo test --manifest-path candle-binding/Cargo.toml --no-default-features --lib embedding_init_order_regressions -- --nocapture 2>&1 | tee /tmp/pr2067-regressions.log
+          cargo test --manifest-path candle-binding/Cargo.toml --locked --no-default-features --lib embedding_init_order_regressions -- --nocapture 2>&1 | tee /tmp/pr2067-regressions.log
       - name: Binding minimal tests
+        if: always() && steps.candidate.outcome == 'success'
         shell: bash
         run: |
           set -euo pipefail
           make test-binding-minimal 2>&1 | tee /tmp/pr2067-minimal.log
-      - name: Binding LoRA tests
-        if: always()
+      - name: Binding LoRA tests (strict log outcome)
+        if: always() && steps.candidate.outcome == 'success'
         shell: bash
         run: |
           set -euo pipefail
           make test-binding-lora 2>&1 | tee /tmp/pr2067-lora.log
-      - name: Retain validation logs
+          if grep -Eq '^FAIL|^--- FAIL:|^[[:space:]]+--- FAIL:' /tmp/pr2067-lora.log; then
+            echo '::error::LoRA target masked failing Go tests; inspect the retained log for missing-model prerequisites or regressions.'
+            exit 1
+          fi
+      - name: Retain validation logs and candidate patch
         if: always()
         uses: actions/upload-artifact@v4
         with:
