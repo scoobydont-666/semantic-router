@@ -6,7 +6,7 @@ permissions:
   contents: write
 concurrency:
   group: pr-2067-review-validation
-  cancel-in-progress: true
+  cancel-in-progress: false
 jobs:
   validate:
     runs-on: ubuntu-24.04
@@ -35,6 +35,7 @@ jobs:
         run: |
           set -euo pipefail
           git fetch --no-tags https://github.com/vllm-project/semantic-router.git "$PR2067_BASE"
+          python3 tools/pr2067/refactor_tests.py
           python3 tools/pr2067/prepare.py
           git rev-parse HEAD | tee /tmp/pr2067-head.log
           git diff "$PR2067_BASE" HEAD --check
