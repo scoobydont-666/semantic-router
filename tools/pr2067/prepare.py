@@ -9,9 +9,10 @@ import re
 import subprocess
 import tempfile
 
-BASE = "b82342ae4fa402e961feffa4dafb78cec0bd6c7d"
+BASE = os.environ.get("PR2067_BASE", "8c76b723c723fd79163a6cca98f62d5af03fb722")
 TARGET = Path("candle-binding/src/ffi/embedding.rs")
 TEST = Path("candle-binding/src/ffi/embedding_init_test.rs")
+MAKE = Path("tools/make/rust.mk")
 
 
 def git(*args, env=None, input=None):
@@ -185,6 +186,11 @@ if s.count("GLOBAL_MODEL_FACTORY.set(") != 4:
 s += '\n#[cfg(test)]\n#[path = "embedding_init_test.rs"]\nmod init_order_tests;\n'
 TARGET.write_text(s)
 TEST.write_text(Path("tools/pr2067/embedding_init_test.rs").read_text())
+make = git("show", f"{BASE}:{MAKE}") + "\n"
+anchor = "RUST_CI_LIB_TESTS ?= " + chr(92) + "\n"
+if make.count(anchor) != 1:
+    raise RuntimeError("could not locate Rust CI allowlist")
+MAKE.write_text(make.replace(anchor, anchor + "\tffi::embedding::init_order_tests::embedding_init_order_regressions " + chr(92) + "\n"))
 subprocess.run(["rustfmt", "--edition", "2021", "--config", "skip_children=true", str(TARGET), str(TEST)], check=True)
 subprocess.run(["git", "diff", "--check"], check=True)
 
@@ -193,7 +199,7 @@ with tempfile.TemporaryDirectory() as directory:
     env = os.environ.copy()
     env["GIT_INDEX_FILE"] = str(Path(directory) / "index")
     git("read-tree", BASE, env=env)
-    git("add", "--", str(TARGET), str(TEST), env=env)
+    git("add", "--", str(TARGET), str(TEST), str(MAKE), env=env)
     tree = git("write-tree", env=env)
     env.update(GIT_AUTHOR_NAME="Josh Jones", GIT_AUTHOR_EMAIL="262070388+scoobydont-666@users.noreply.github.com",
                GIT_COMMITTER_NAME="Josh Jones", GIT_COMMITTER_EMAIL="262070388+scoobydont-666@users.noreply.github.com")
@@ -207,14 +213,15 @@ model. Keep inference lock-free and initialization failures retryable.
 Add isolated-process CPU regressions with tiny locally generated mmBERT
 checkpoints for both ownership orders, competing initializers, all four
 entrypoint gates, repeated/replacement paths, failed-load retry and poison.
+Run the new regression in the existing model-free Rust CI allowlist.
 
 Signed-off-by: Josh Jones <262070388+scoobydont-666@users.noreply.github.com>
 """
     candidate = git("commit-tree", tree, "-p", BASE, env=env, input=message)
 changed = git("diff-tree", "--no-commit-id", "--name-only", "-r", candidate).splitlines()
-if sorted(changed) != sorted([str(TARGET), str(TEST)]):
+if sorted(changed) != sorted([str(TARGET), str(TEST), str(MAKE)]):
     raise RuntimeError(f"unexpected candidate paths: {changed}")
-branch = f"work/pr-2067-candidate-{os.environ['GITHUB_RUN_ID']}"
+branch = f"work/pr-2067-candidate-{os.environ['GITHUB_RUN_ID']}-{os.environ.get('GITHUB_RUN_ATTEMPT', '1')}"
 git("push", "origin", f"{candidate}:refs/heads/{branch}")
 Path("/tmp/pr2067-candidate.sha").write_text(candidate + "\n")
 # Test a clean checkout of this exact candidate, not an uncommitted workspace.

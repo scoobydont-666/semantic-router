@@ -34,13 +34,13 @@ jobs:
         run: |
           set -euo pipefail
           git fetch --no-tags https://github.com/vllm-project/semantic-router.git "$PR2067_BASE"
-          sed -i "s/b82342ae4fa402e961feffa4dafb78cec0bd6c7d/$PR2067_BASE/g" tools/pr2067/prepare.py
           python3 tools/pr2067/prepare.py
           git rev-parse HEAD | tee /tmp/pr2067-head.log
           git diff "$PR2067_BASE" HEAD --check
           git diff "$PR2067_BASE" HEAD > /tmp/pr2067-remediation.patch
           rustfmt --edition 2021 --config skip_children=true --check candle-binding/src/ffi/embedding.rs candle-binding/src/ffi/embedding_init_test.rs
       - name: Review repository gates
+        if: ${{ !cancelled() && steps.candidate.outcome == 'success' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -49,21 +49,21 @@ jobs:
             cat "$f"
             echo '::endgroup::'
           done
-          grep -n -A18 -B3 '^test-binding-\(minimal\|lora\):' tools/make/*.mk Makefile
-          make agent-report ENV=cpu CHANGED_FILES="candle-binding/src/ffi/embedding.rs candle-binding/src/ffi/embedding_init_test.rs" 2>&1 | tee /tmp/pr2067-agent-report.log
-      - name: Focused initialization regressions
+          make agent-report ENV=cpu CHANGED_FILES="candle-binding/src/ffi/embedding.rs candle-binding/src/ffi/embedding_init_test.rs tools/make/rust.mk" 2>&1 | tee /tmp/pr2067-agent-report.log
+      - name: CPU Rust CI suite including initialization regressions
+        if: ${{ !cancelled() && steps.candidate.outcome == 'success' }}
         shell: bash
         run: |
           set -euo pipefail
-          cargo test --manifest-path candle-binding/Cargo.toml --locked --no-default-features --lib embedding_init_order_regressions -- --nocapture 2>&1 | tee /tmp/pr2067-regressions.log
+          make test-rust-ci 2>&1 | tee /tmp/pr2067-regressions.log
       - name: Binding minimal tests
-        if: always() && steps.candidate.outcome == 'success'
+        if: ${{ !cancelled() && steps.candidate.outcome == 'success' }}
         shell: bash
         run: |
           set -euo pipefail
           make test-binding-minimal 2>&1 | tee /tmp/pr2067-minimal.log
       - name: Binding LoRA tests (strict log outcome)
-        if: always() && steps.candidate.outcome == 'success'
+        if: ${{ !cancelled() && steps.candidate.outcome == 'success' }}
         shell: bash
         run: |
           set -euo pipefail
